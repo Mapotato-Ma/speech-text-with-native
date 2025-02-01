@@ -1,40 +1,100 @@
 extern crate tts;
 extern crate wasm_bindgen;
 
-use std::{thread, time::{Duration, Instant}};
+use js_sys::Promise;
+use std::time::{Duration, Instant};
 use tts::Tts;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
+use web_sys::window;
 
 #[wasm_bindgen]
-pub fn speek(text: &str, voice_index: usize, rate: f32, _volume: f32, timeout: u64) {
-    // 初始化TTS引擎
-    let mut tts = Tts::default().expect("初始化TTS引擎失败");
+pub fn speek_async(
+    text: String,
+    voice_index: usize,
+    rate: f32,
+    volume: f32,
+    timeout: u64,
+) -> Promise {
+    future_to_promise(async move {
+        // 创建和存储动画帧回调
+        let window = window().ok_or_else(|| JsValue::from_str("无法获取window对象"))?;
 
-    // 设置语音速度
-    tts.set_rate(rate).expect("设置语速失败");
-
-    // 设置音量
-    tts.set_volume(_volume).expect("设置音量失败");
-
-    // 设置音色
-    if let Some(voice) = tts.voices().expect("获取音色失败").get(voice_index) {
-        tts.set_voice(voice).expect("设置音色失败");
-    }
-
-    // 开始朗读文本
-    tts.speak(text, false).expect("朗读失败");
-
-    // 记录开始时间
-    let start_time = Instant::now();
-
-    // 等待直到播放完成或超时
-    while tts.is_speaking().expect("检查播放状态失败") {
-        thread::sleep(Duration::from_millis(100));
-
-        // 检查是否超时
-        if start_time.elapsed() >= Duration::from_secs(timeout) {
-            tts.stop().expect("停止播放失败");
-            break;
+        struct TtsWrapper {
+            tts: Tts,
         }
-    }
+
+        impl TtsWrapper {
+            fn new() -> Result<Self, String> {
+                Ok(Self {
+                    tts: Tts::default().map_err(|e| e.to_string())?,
+                })
+            }
+        }
+
+        impl Drop for TtsWrapper {
+            fn drop(&mut self) {
+                let _ = self.tts.stop();
+            }
+        }
+
+        let result = async move {
+            let mut wrapper = TtsWrapper::new()
+                .map_err(|e| JsValue::from_str(&format!("初始化TTS失败: {}", e)))?;
+
+            wrapper
+                .tts
+                .set_rate(rate)
+                .map_err(|e| JsValue::from_str(&format!("设置语速失败: {}", e)))?;
+
+            wrapper
+                .tts
+                .set_volume(volume)
+                .map_err(|e| JsValue::from_str(&format!("设置音量失败: {}", e)))?;
+
+            let voices = wrapper
+                .tts
+                .voices()
+                .map_err(|e| JsValue::from_str(&format!("获取音色失败: {}", e)))?;
+
+            if let Some(voice) = voices.get(voice_index) {
+                wrapper
+                    .tts
+                    .set_voice(voice)
+                    .map_err(|e| JsValue::from_str(&format!("设置音色失败: {}", e)))?;
+            }
+
+            wrapper
+                .tts
+                .speak(&text, false)
+                .map_err(|e| JsValue::from_str(&format!("朗读失败: {}", e)))?;
+
+            let start = Instant::now();
+
+            let closure = Closure::wrap(Box::new(move || {
+                // 空函数
+            }) as Box<dyn FnMut()>);
+
+            while wrapper
+                .tts
+                .is_speaking()
+                .map_err(|e| JsValue::from_str(&format!("检查播放状态失败: {}", e)))?
+            {
+                if start.elapsed() >= Duration::from_secs(timeout) {
+                    return Err(JsValue::from_str("播放超时"));
+                }
+
+                window.request_animation_frame(closure.as_ref().unchecked_ref())?;
+
+                // 短暂等待避免CPU占用过高
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            closure.forget();
+            Ok(JsValue::from_str("播放完成"))
+        }
+        .await;
+
+        result
+    })
 }
