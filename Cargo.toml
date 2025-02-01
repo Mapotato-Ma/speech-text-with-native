@@ -2,6 +2,10 @@
 name = "speech-text-with-native"
 version = "0.1.0"
 edition = "2021"
+authors = ["Mapotato"]
+description = "一个文本转语音的rust库，支持浏览器和nodejs"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/Mapotato-Ma/speech-text-with-native"
 
 [lib]
 crate-type = ["cdylib"]
